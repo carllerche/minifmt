@@ -1,0 +1,8 @@
+[package]
+name = "minifmt"
+version = "0.1.0"
+authors = ["Carl Lerche <me@carllerche.com>"]
+
+[dependencies]
+proc-macro2 = "0.4.20"
+syn = { version = "0.15.11", features = [ "full", "extra-traits", "visit" ] }
