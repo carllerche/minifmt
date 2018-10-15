@@ -8,6 +8,9 @@ macro_rules! check {
 
         let expect = $expect;
 
-        assert_eq!(actual, &expect[1..]);
+        if actual != &expect[1..] {
+            panic!("assertion failed. \n\n=== Expected: ===\n\n{}\n\n=== Actual: ===\n\n{}\n",
+                   &expect[1..], actual);
+        }
     }}
 }

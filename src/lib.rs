@@ -122,6 +122,12 @@ impl FormatFile {
         }
     }
 
+    fn visit_macro_body(&mut self, tts: &TokenStream) {
+        // TODO: How to do this?
+        // Should it be parsed as `syn::Stmt`?
+        write!(self, "{}", tts.to_string());
+    }
+
     // ===== Formatting helpers =====
 
     fn visit_punctuated<T, U>(&mut self, punctuated: &Punctuated<T, U>, space: Space)
@@ -166,6 +172,19 @@ impl FormatFile {
         res
     }
 
+    fn block_no_nl<F, R>(&mut self, f: F) -> R
+    where F: FnOnce(&mut Self) -> R,
+    {
+        if !self.is_start_of_line() {
+            write!(self, " ");
+        }
+
+        write!(self, "{{\n");
+        let res = self.indent(f);
+        write!(self, "}}");
+        res
+    }
+
     fn indent<F, R>(&mut self, f: F) -> R
     where F: FnOnce(&mut Self) -> R
     {
@@ -204,19 +223,55 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
     }
 
     fn visit_arg_captured(&mut self, i: &'a syn::ArgCaptured) {
-        unimplemented!();
+        self.visit_pat(&i.pat);
+        write!(self, ": ");
+        self.visit_type(&i.ty);
     }
 
     fn visit_arg_self(&mut self, i: &'a syn::ArgSelf) {
-        unimplemented!();
+        if i.mutability.is_some() {
+            write!(self, "mut ");
+        }
+
+        write!(self, "self");
     }
 
     fn visit_arg_self_ref(&mut self, i: &'a syn::ArgSelfRef) {
-        unimplemented!();
+        write!(self, "&");
+
+        if let Some(ref lt) = i.lifetime {
+            self.visit_lifetime(lt);
+        }
+
+        if i.mutability.is_some() {
+            if i.lifetime.is_some() {
+                write!(self, " ");
+            }
+
+            write!(self, "mut ");
+        }
+
+        write!(self, "self");
     }
 
     fn visit_arm(&mut self, i: &'a syn::Arm) {
-        unimplemented!();
+        self.visit_attributes(&i.attrs);
+
+        if i.leading_vert.is_some() {
+            write!(self, "| ");
+        }
+
+        self.visit_punctuated(&i.pats, SpaceBoth);
+
+        write!(self, " => ");
+
+        self.visit_expr(&i.body);
+
+        if i.comma.is_some() {
+            write!(self, ",");
+        }
+
+        write!(self, "\n");
     }
 
     fn visit_attr_style(&mut self, i: &'a syn::AttrStyle) {
@@ -254,7 +309,11 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
     }
 
     fn visit_block(&mut self, i: &'a syn::Block) {
-        unimplemented!();
+        self.block_no_nl(|v| {
+            for stmt in &i.stmts {
+                v.visit_stmt(stmt);
+            }
+        });
     }
 
     fn visit_bound_lifetimes(&mut self, i: &'a syn::BoundLifetimes) {
@@ -290,7 +349,9 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
     }
 
     fn visit_expr_block(&mut self, i: &'a syn::ExprBlock) {
-        unimplemented!();
+        self.visit_attributes(&i.attrs);
+        assert!(i.label.is_none()); // unimplemented!();
+        self.visit_block(&i.block);
     }
 
     fn visit_expr_box(&mut self, i: &'a syn::ExprBox) {
@@ -302,7 +363,11 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
     }
 
     fn visit_expr_call(&mut self, i: &'a syn::ExprCall) {
-        unimplemented!();
+        self.visit_attributes(&i.attrs);
+        self.visit_expr(&i.func);
+        write!(self, "(");
+        self.visit_punctuated(&i.args, SpaceRight);
+        write!(self, ")");
     }
 
     fn visit_expr_cast(&mut self, i: &'a syn::ExprCast) {
@@ -319,11 +384,25 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
     }
 
     fn visit_expr_field(&mut self, i: &'a syn::ExprField) {
-        unimplemented!();
+        self.visit_attributes(&i.attrs);
+        self.visit_expr(&i.base);
+        write!(self, ".");
+        self.visit_member(&i.member);
     }
 
     fn visit_expr_for_loop(&mut self, i: &'a syn::ExprForLoop) {
-        unimplemented!();
+        self.visit_attributes(&i.attrs);
+        if let Some(ref _label) = i.label {
+            unimplemented!();
+            // TODO: Where should the new line go?
+            // self.visit_label(label);
+        }
+        write!(self, "for ");
+        self.visit_pat(&i.pat);
+        write!(self, " in ");
+        self.visit_expr(&i.expr);
+
+        self.block(|v| v.visit_block(&i.body));
     }
 
     fn visit_expr_group(&mut self, i: &'a syn::ExprGroup) {
@@ -331,7 +410,18 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
     }
 
     fn visit_expr_if(&mut self, i: &'a syn::ExprIf) {
-        unimplemented!();
+        self.visit_attributes(&i.attrs);
+        write!(self, "if ");
+        self.visit_expr(&i.cond);
+
+        self.block_no_nl(|v| v.visit_block(&i.then_branch));
+
+        if let Some((_, ref else_branch)) = i.else_branch {
+            write!(self, " else ");
+            self.visit_expr(else_branch);
+        }
+
+        write!(self, "\n");
     }
 
     fn visit_expr_in_place(&mut self, i: &'a syn::ExprInPlace) {
@@ -351,15 +441,30 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
     }
 
     fn visit_expr_macro(&mut self, i: &'a syn::ExprMacro) {
-        unimplemented!();
+        self.visit_attributes(&i.attrs);
+        self.visit_macro(&i.mac);
     }
 
     fn visit_expr_match(&mut self, i: &'a syn::ExprMatch) {
-        unimplemented!();
+        self.visit_attributes(&i.attrs);
+        write!(self, "match ");
+        self.visit_expr(&i.expr);
+        self.block_no_nl(|v| {
+            for arm in &i.arms {
+                v.visit_arm(arm);
+            }
+        });
     }
 
     fn visit_expr_method_call(&mut self, i: &'a syn::ExprMethodCall) {
-        unimplemented!();
+        self.visit_attributes(&i.attrs);
+        self.visit_expr(&i.receiver);
+        write!(self, ".");
+        self.visit_ident(&i.method);
+        assert!(i.turbofish.is_none());
+        write!(self, "(");
+        self.visit_punctuated(&i.args, SpaceRight);
+        write!(self, ")");
     }
 
     fn visit_expr_paren(&mut self, i: &'a syn::ExprParen) {
@@ -367,57 +472,62 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
     }
 
     fn visit_expr_path(&mut self, i: &'a syn::ExprPath) {
-        unimplemented!();
+        self.visit_attributes(&i.attrs);
+        assert!(i.qself.is_none()); // unimplemented
+        self.visit_path(&i.path);
     }
 
     fn visit_expr_range(&mut self, i: &'a syn::ExprRange) {
         unimplemented!();
     }
 
-
     fn visit_expr_reference(&mut self, i: &'a syn::ExprReference) {
-        unimplemented!();
-    }
+        self.visit_attributes(&i.attrs);
+        write!(self, "&");
 
+        if i.mutability.is_some() {
+            write!(self, "mut ");
+        }
+
+        self.visit_expr(&i.expr);
+    }
 
     fn visit_expr_repeat(&mut self, i: &'a syn::ExprRepeat) {
         unimplemented!();
     }
 
-
     fn visit_expr_return(&mut self, i: &'a syn::ExprReturn) {
         unimplemented!();
     }
 
-
     fn visit_expr_struct(&mut self, i: &'a syn::ExprStruct) {
-        unimplemented!();
+        self.visit_attributes(&i.attrs);
+        self.visit_path(&i.path);
+        write!(self, "{{");
+        write!(self, "}}");
     }
-
 
     fn visit_expr_try(&mut self, i: &'a syn::ExprTry) {
         unimplemented!();
     }
 
-
     fn visit_expr_try_block(&mut self, i: &'a syn::ExprTryBlock) {
         unimplemented!();
     }
 
-
     fn visit_expr_tuple(&mut self, i: &'a syn::ExprTuple) {
         unimplemented!();
     }
-
 
     fn visit_expr_type(&mut self, i: &'a syn::ExprType) {
         unimplemented!();
     }
 
     fn visit_expr_unary(&mut self, i: &'a syn::ExprUnary) {
-        unimplemented!();
+        self.visit_attributes(&i.attrs);
+        self.visit_un_op(&i.op);
+        self.visit_expr(&i.expr);
     }
-
 
     fn visit_expr_unsafe(&mut self, i: &'a syn::ExprUnsafe) {
         unimplemented!();
@@ -475,12 +585,21 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
         unimplemented!();
     }
 
-    fn visit_fn_arg(&mut self, i: &'a syn::FnArg) {
-        unimplemented!();
-    }
-
     fn visit_fn_decl(&mut self, i: &'a syn::FnDecl) {
-        unimplemented!();
+        assert!(i.generics.where_clause.is_none()); // unimplemented
+        self.visit_generics(&i.generics);
+
+        write!(self, "(");
+
+        self.visit_punctuated(&i.inputs, SpaceRight);
+        assert!(i.variadic.is_none()); // unimplemented
+
+        write!(self, ")");
+
+        // TODO: If there are where clauses, they come here.
+        write!(self, " ");
+
+        self.visit_return_type(&i.output);
     }
 
     fn visit_foreign_item(&mut self, i: &'a syn::ForeignItem) {
@@ -549,7 +668,12 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
     }
 
     fn visit_impl_item_method(&mut self, i: &'a syn::ImplItemMethod) {
-        unimplemented!();
+        assert!(i.defaultness.is_none()); // unimplemented
+
+        self.visit_attributes(&i.attrs);
+        self.visit_visibility(&i.vis);
+        self.visit_method_sig(&i.sig);
+        self.visit_block(&i.block);
     }
 
     fn visit_impl_item_type(&mut self, i: &'a syn::ImplItemType) {
@@ -700,10 +824,10 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
         unimplemented!();
     }
 
-
     fn visit_label(&mut self, i: &'a syn::Label) {
         unimplemented!();
     }
+
     fn visit_lifetime(&mut self, i: &'a syn::Lifetime) {
         unimplemented!();
     }
@@ -762,18 +886,49 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
 
 
     fn visit_local(&mut self, i: &'a syn::Local) {
-        unimplemented!();
+        self.visit_attributes(&i.attrs);
+        write!(self, "let ");
+        self.visit_punctuated(&i.pats, SpaceBoth);
+
+        if let Some((_, ref ty)) = i.ty {
+            write!(self, ": ");
+            self.visit_type(ty);
+        }
+
+        if let Some((_, ref init)) = i.init {
+            write!(self, " = ");
+            self.visit_expr(init);
+        }
+
+        write!(self, ";\n");
     }
 
     fn visit_macro(&mut self, i: &'a syn::Macro) {
-        unimplemented!();
+        use syn::MacroDelimiter::*;
+
+        self.visit_path(&i.path);
+        write!(self, "!");
+
+        match i.delimiter {
+            Paren(_) => {
+                write!(self, "(");
+                self.visit_macro_body(&i.tts);
+                write!(self, ")");
+            }
+            Brace(_) => {
+                write!(self, "[");
+                self.visit_macro_body(&i.tts);
+                write!(self, "]");
+            }
+            Bracket(_) => {
+                self.block_no_nl(|v| {
+                    v.visit_macro_body(&i.tts);
+                });
+            }
+        }
     }
 
     fn visit_macro_delimiter(&mut self, i: &'a syn::MacroDelimiter) {
-        unimplemented!();
-    }
-
-    fn visit_member(&mut self, i: &'a syn::Member) {
         unimplemented!();
     }
 
@@ -791,9 +946,22 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
     }
 
     fn visit_method_sig(&mut self, i: &'a syn::MethodSig) {
-        unimplemented!();
-    }
+        assert!(i.constness.is_none()); // unimplemented
+        assert!(i.abi.is_none()); // unimplemented
 
+        if i.unsafety.is_some() {
+            write!(self, "unsafe ");
+        }
+
+        if i.asyncness.is_some() {
+            write!(self, "async ");
+        }
+
+        write!(self, "fn ");
+
+        self.visit_ident(&i.ident);
+        self.visit_fn_decl(&i.decl);
+    }
 
     fn visit_method_turbofish(&mut self, i: &'a syn::MethodTurbofish) {
         unimplemented!();
@@ -803,74 +971,71 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
         unimplemented!();
     }
 
-
-    fn visit_pat(&mut self, i: &'a syn::Pat) {
-        unimplemented!();
-    }
-
-
     fn visit_pat_box(&mut self, i: &'a syn::PatBox) {
         unimplemented!();
     }
 
-
     fn visit_pat_ident(&mut self, i: &'a syn::PatIdent) {
-        unimplemented!();
+        if i.by_ref.is_some() {
+            write!(self, "ref ");
+        }
+        if i.mutability.is_some() {
+            write!(self, "mut ");
+        }
+        self.visit_ident(&i.ident);
+        assert!(i.subpat.is_none()); // unimplemented
     }
-
 
     fn visit_pat_lit(&mut self, i: &'a syn::PatLit) {
         unimplemented!();
     }
 
-
     fn visit_pat_macro(&mut self, i: &'a syn::PatMacro) {
         unimplemented!();
     }
-
 
     fn visit_pat_path(&mut self, i: &'a syn::PatPath) {
         unimplemented!();
     }
 
-
     fn visit_pat_range(&mut self, i: &'a syn::PatRange) {
         unimplemented!();
     }
-
 
     fn visit_pat_ref(&mut self, i: &'a syn::PatRef) {
         unimplemented!();
     }
 
-
     fn visit_pat_slice(&mut self, i: &'a syn::PatSlice) {
         unimplemented!();
     }
-
 
     fn visit_pat_struct(&mut self, i: &'a syn::PatStruct) {
         unimplemented!();
     }
 
-
     fn visit_pat_tuple(&mut self, i: &'a syn::PatTuple) {
-        unimplemented!();
-    }
+        write!(self, "(");
 
+        self.visit_punctuated(&i.front, SpaceRight);
+
+        assert!(i.dot2_token.is_none()); // unimplemented
+        assert!(i.comma_token.is_none()); // unimplemented
+        assert!(i.back.is_empty()); // unimplemented
+        write!(self, ")");
+    }
 
     fn visit_pat_tuple_struct(&mut self, i: &'a syn::PatTupleStruct) {
-        unimplemented!();
+        self.visit_path(&i.path);
+        self.visit_pat_tuple(&i.pat);
     }
-
 
     fn visit_pat_verbatim(&mut self, i: &'a syn::PatVerbatim) {
         unimplemented!();
     }
 
-
     fn visit_pat_wild(&mut self, i: &'a syn::PatWild) {
-        unimplemented!();
+        write!(self, "_");
     }
 
     fn visit_path(&mut self, i: &'a syn::Path) {
@@ -897,27 +1062,49 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
         unimplemented!();
     }
 
-
     fn visit_range_limits(&mut self, i: &'a syn::RangeLimits) {
         unimplemented!();
     }
 
     fn visit_return_type(&mut self, i: &'a syn::ReturnType) {
-        unimplemented!();
+        use syn::ReturnType::*;
+
+        match *i {
+            Type(_, ref ty) => {
+                write!(self, "-> ");
+                self.visit_type(ty);
+            }
+            _ => {}
+        }
     }
 
     fn visit_span(&mut self, i: &'a proc_macro2::Span) {
         unimplemented!();
     }
 
-
     fn visit_stmt(&mut self, i: &'a syn::Stmt) {
-        unimplemented!();
+        use syn::Stmt::*;
+
+        match *i {
+            Local(ref v) => {
+                self.visit_local(v);
+                write!(self, ";");
+            }
+            Item(ref v) => {
+                self.visit_item(v);
+            }
+            Expr(ref v) => self.visit_expr(v),
+            Semi(ref v, _) => {
+                self.visit_expr(v);
+                write!(self, ";");
+            }
+        }
+
+        write!(self, "\n");
     }
 
     fn visit_trait_bound(&mut self, i: &'a syn::TraitBound) {
-        // Unimplemented
-        assert!(i.paren_token.is_none());
+        assert!(i.paren_token.is_none()); // unimplemented
         assert!(i.lifetimes.is_none());
 
         self.visit_trait_bound_modifier(&i.modifier);
@@ -1014,11 +1201,27 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
     }
 
     fn visit_type_reference(&mut self, i: &'a syn::TypeReference) {
-        unimplemented!();
+        write!(self, "&");
+
+        if let Some(ref lt) = i.lifetime {
+            self.visit_lifetime(lt);
+        }
+
+        if i.mutability.is_some() {
+            if i.lifetime.is_some() {
+                write!(self, " ");
+            }
+
+            write!(self, "mut ");
+        }
+
+        self.visit_type(&i.elem);
     }
 
     fn visit_type_slice(&mut self, i: &'a syn::TypeSlice) {
-        unimplemented!();
+        write!(self, "[");
+        self.visit_type(&i.elem);
+        write!(self, "]");
     }
 
     fn visit_type_trait_object(&mut self, i: &'a syn::TypeTraitObject) {
@@ -1036,11 +1239,23 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
     }
 
     fn visit_un_op(&mut self, i: &'a syn::UnOp) {
-        unimplemented!();
+        use syn::UnOp::*;
+
+        match *i {
+            Deref(_) => {
+                write!(self, "*");
+            }
+            Not(_) => {
+                write!(self, "!");
+            }
+            Neg(_) => {
+                write!(self, "-");
+            }
+        }
     }
 
     fn visit_use_glob(&mut self, i: &'a syn::UseGlob) {
-        unimplemented!();
+        write!(self, "*");
     }
 
     fn visit_use_group(&mut self, i: &'a syn::UseGroup) {

@@ -24,3 +24,4 @@ macro_rules! impl_punct {
 impl_punct!(Add, "+");
 impl_punct!(Comma, ",");
 impl_punct!(Colon2, "::");
+impl_punct!(Or, "|");
