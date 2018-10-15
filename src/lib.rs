@@ -4,10 +4,16 @@ extern crate proc_macro2;
 extern crate syn;
 
 mod error;
+mod node;
+mod punct;
 
 pub use error::Error;
+use node::Node;
+use punct::{Space, Punctuation};
+use punct::Space::*;
 
 use proc_macro2::TokenStream;
+use syn::punctuated::Punctuated;
 use syn::visit::{Visit, visit_file};
 
 use std::fmt::{self, Write};
@@ -112,6 +118,35 @@ impl FormatFile {
 
     // ===== Formatting helpers =====
 
+    fn visit_punctuated<T, U>(&mut self, punctuated: &Punctuated<T, U>, space: Space)
+    where
+        T: Node,
+        U: Punctuation,
+    {
+        for pair in punctuated.pairs() {
+            pair.value().visit(self);
+
+            if let Some(punct) = pair.punct() {
+                let (l, r) = match space {
+                    NewLine => {
+                        ("", "\n")
+                    }
+                    SpaceBoth => {
+                        (" ", " ")
+                    }
+                    SpaceRight => {
+                        ("", " ")
+                    }
+                    NoSpace => {
+                        ("", "")
+                    }
+                };
+
+                write!(self, "{}{}{}", l, punct.as_str(), r);
+            }
+        }
+    }
+
     fn block<F, R>(&mut self, f: F) -> R
     where F: FnOnce(&mut Self) -> R,
     {
@@ -153,7 +188,13 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
     }
 
     fn visit_angle_bracketed_generic_arguments(&mut self, i: &'a syn::AngleBracketedGenericArguments) {
-        unimplemented!();
+        if i.colon2_token.is_some() {
+            write!(self, "::");
+        }
+
+        write!(self, "<");
+        self.visit_punctuated(&i.args, SpaceRight);
+        write!(self, ">");
     }
 
     fn visit_arg_captured(&mut self, i: &'a syn::ArgCaptured) {
@@ -222,10 +263,6 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
         unimplemented!();
     }
 
-    fn visit_expr(&mut self, i: &'a syn::Expr) {
-        unimplemented!();
-    }
-
     fn visit_expr_array(&mut self, i: &'a syn::ExprArray) {
         unimplemented!();
     }
@@ -266,7 +303,6 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
         unimplemented!();
     }
 
-
     fn visit_expr_closure(&mut self, i: &'a syn::ExprClosure) {
         unimplemented!();
     }
@@ -280,21 +316,17 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
         unimplemented!();
     }
 
-
     fn visit_expr_for_loop(&mut self, i: &'a syn::ExprForLoop) {
         unimplemented!();
     }
-
 
     fn visit_expr_group(&mut self, i: &'a syn::ExprGroup) {
         unimplemented!();
     }
 
-
     fn visit_expr_if(&mut self, i: &'a syn::ExprIf) {
         unimplemented!();
     }
-
 
     fn visit_expr_in_place(&mut self, i: &'a syn::ExprInPlace) {
         unimplemented!();
@@ -304,30 +336,21 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
         unimplemented!();
     }
 
-
     fn visit_expr_let(&mut self, i: &'a syn::ExprLet) {
         unimplemented!();
     }
-
-    fn visit_expr_lit(&mut self, i: &'a syn::ExprLit) {
-        unimplemented!();
-    }
-
 
     fn visit_expr_loop(&mut self, i: &'a syn::ExprLoop) {
         unimplemented!();
     }
 
-
     fn visit_expr_macro(&mut self, i: &'a syn::ExprMacro) {
         unimplemented!();
     }
 
-
     fn visit_expr_match(&mut self, i: &'a syn::ExprMatch) {
         unimplemented!();
     }
-
 
     fn visit_expr_method_call(&mut self, i: &'a syn::ExprMethodCall) {
         unimplemented!();
@@ -340,7 +363,6 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
     fn visit_expr_path(&mut self, i: &'a syn::ExprPath) {
         unimplemented!();
     }
-
 
     fn visit_expr_range(&mut self, i: &'a syn::ExprRange) {
         unimplemented!();
@@ -410,7 +432,17 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
     }
 
     fn visit_field(&mut self, i: &'a syn::Field) {
-        unimplemented!();
+        self.visit_attributes(&i.attrs);
+        self.visit_visibility(&i.vis);
+
+        // TODO: Handle;
+        assert!(i.ident.is_some());
+        assert!(i.colon_token.is_some());
+
+        self.visit_ident(i.ident.as_ref().unwrap());
+
+        write!(self, ": ");
+        self.visit_type(&i.ty);
     }
 
 
@@ -423,12 +455,10 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
         unimplemented!();
     }
 
-    fn visit_fields(&mut self, i: &'a syn::Fields) {
-        unimplemented!();
-    }
-
     fn visit_fields_named(&mut self, i: &'a syn::FieldsNamed) {
-        unimplemented!();
+        self.block(|v| {
+            v.visit_punctuated(&i.named, NewLine);
+        });
     }
 
     fn visit_fields_unnamed(&mut self, i: &'a syn::FieldsUnnamed) {
@@ -471,22 +501,24 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
         unimplemented!();
     }
 
-    fn visit_generic_argument(&mut self, i: &'a syn::GenericArgument) {
-        unimplemented!();
-    }
-
-
     fn visit_generic_method_argument(&mut self, i: &'a syn::GenericMethodArgument) {
         unimplemented!();
     }
 
-    fn visit_generic_param(&mut self, i: &'a syn::GenericParam) {
-        unimplemented!();
+    fn visit_generics(&mut self, i: &'a syn::Generics) {
+        if i.params.is_empty() {
+            return;
+        }
+
+        write!(self, "<");
+        self.visit_punctuated(&i.params, SpaceRight);
+        write!(self, ">");
+
+        if let Some(ref where_clause) = i.where_clause {
+            self.visit_where_clause(where_clause);
+        }
     }
 
-    fn visit_generics(&mut self, i: &'a syn::Generics) {
-        unimplemented!();
-    }
     fn visit_ident(&mut self, i: &'a syn::Ident) {
         write!(self, "{}", i);
     }
@@ -589,7 +621,17 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
     }
 
     fn visit_item_struct(&mut self, i: &'a syn::ItemStruct) {
-        unimplemented!();
+        self.visit_attributes(&i.attrs);
+        self.visit_visibility(&i.vis);
+
+        write!(self, "struct {}", i.ident);
+
+        self.visit_generics(&i.generics);
+        self.visit_fields(&i.fields);
+
+        if i.semi_token.is_some() {
+            write!(self, ";");
+        }
     }
 
     fn visit_item_trait(&mut self, i: &'a syn::ItemTrait) {
@@ -660,7 +702,23 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
     }
 
     fn visit_lit_int(&mut self, i: &'a syn::LitInt) {
-        unimplemented!();
+        use syn::IntSuffix::*;
+
+        write!(self, "{}{}", i.value(), match i.suffix() {
+            I8 => "i8",
+            I16 => "i16",
+            I32 => "i32",
+            I64 => "i64",
+            I128 => "i128",
+            Isize => "isize",
+            U8 => "u8",
+            U16 => "u16",
+            U32 => "u32",
+            U64 => "u64",
+            U128 => "u128",
+            Usize => "usize",
+            None => "",
+        });
     }
 
     fn visit_lit_str(&mut self, i: &'a syn::LitStr) {
@@ -689,7 +747,10 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
     }
 
     fn visit_meta_list(&mut self, i: &'a syn::MetaList) {
-        unimplemented!();
+        self.visit_ident(&i.ident);
+        write!(self, "(");
+        self.visit_punctuated(&i.nested, SpaceRight);
+        write!(self, ")");
     }
 
     fn visit_meta_name_value(&mut self, i: &'a syn::MetaNameValue) {
@@ -704,10 +765,6 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
 
 
     fn visit_method_turbofish(&mut self, i: &'a syn::MethodTurbofish) {
-        unimplemented!();
-    }
-
-    fn visit_nested_meta(&mut self, i: &'a syn::NestedMeta) {
         unimplemented!();
     }
 
@@ -786,15 +843,11 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
     }
 
     fn visit_path(&mut self, i: &'a syn::Path) {
-        unimplemented!();
-    }
+        if i.leading_colon.is_some() {
+            write!(self, "::");
+        }
 
-    fn visit_path_arguments(&mut self, i: &'a syn::PathArguments) {
-        unimplemented!();
-    }
-
-    fn visit_path_segment(&mut self, i: &'a syn::PathSegment) {
-        unimplemented!();
+        self.visit_punctuated(&i.segments, NoSpace);
     }
 
     fn visit_predicate_eq(&mut self, i: &'a syn::PredicateEq) {
@@ -832,11 +885,12 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
     }
 
     fn visit_trait_bound(&mut self, i: &'a syn::TraitBound) {
-        unimplemented!();
-    }
+        // Unimplemented
+        assert!(i.paren_token.is_none());
+        assert!(i.lifetimes.is_none());
 
-    fn visit_trait_bound_modifier(&mut self, i: &'a syn::TraitBoundModifier) {
-        unimplemented!();
+        self.visit_trait_bound_modifier(&i.modifier);
+        self.visit_path(&i.path);
     }
 
     fn visit_trait_item(&mut self, i: &'a syn::TraitItem) {
@@ -863,12 +917,12 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
         unimplemented!();
     }
 
-    fn visit_type(&mut self, i: &'a syn::Type) {
-        unimplemented!();
-    }
-
     fn visit_type_array(&mut self, i: &'a syn::TypeArray) {
-        unimplemented!();
+        write!(self, "[");
+        self.visit_type(&i.elem);
+        write!(self, "; ");
+        self.visit_expr(&i.len);
+        write!(self, "]");
     }
 
     fn visit_type_bare_fn(&mut self, i: &'a syn::TypeBareFn) {
@@ -896,11 +950,23 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
     }
 
     fn visit_type_param(&mut self, i: &'a syn::TypeParam) {
-        unimplemented!();
-    }
+        // This will need special handling
+        assert!(i.attrs.is_empty());
 
-    fn visit_type_param_bound(&mut self, i: &'a syn::TypeParamBound) {
-        unimplemented!();
+        self.visit_ident(&i.ident);
+
+        if i.colon_token.is_none() {
+            assert!(i.bounds.is_empty());
+        } else {
+            write!(self, ": ");
+            self.visit_punctuated(&i.bounds, SpaceBoth);
+        }
+
+        if let Some(ref ty) = i.default {
+            assert!(i.eq_token.is_some());
+            write!(self, " = ");
+            self.visit_type(ty);
+        }
     }
 
     fn visit_type_paren(&mut self, i: &'a syn::TypeParen) {
@@ -908,7 +974,8 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
     }
 
     fn visit_type_path(&mut self, i: &'a syn::TypePath) {
-        unimplemented!();
+        assert!(i.qself.is_none()); // TODO: handle
+        self.visit_path(&i.path);
     }
 
     fn visit_type_ptr(&mut self, i: &'a syn::TypePtr) {
@@ -928,7 +995,9 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
     }
 
     fn visit_type_tuple(&mut self, i: &'a syn::TypeTuple) {
-        unimplemented!();
+        write!(self, "(");
+        self.visit_punctuated(&i.elems, SpaceRight);
+        write!(self, ")");
     }
 
     fn visit_type_verbatim(&mut self, i: &'a syn::TypeVerbatim) {
@@ -988,7 +1057,11 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
     }
 
     fn visit_where_clause(&mut self, i: &'a syn::WhereClause) {
-        unimplemented!();
+        write!(self, "where\n");
+
+        self.indent(|v| {
+            v.visit_punctuated(&i.predicates, NewLine);
+        });
     }
 
     fn visit_where_predicate(&mut self, i: &'a syn::WherePredicate) {
