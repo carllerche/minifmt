@@ -116,6 +116,12 @@ impl FormatFile {
         }
     }
 
+    fn visit_impl_items(&mut self, i: &[syn::ImplItem]) {
+        for item in i {
+            self.visit_impl_item(item);
+        }
+    }
+
     // ===== Formatting helpers =====
 
     fn visit_punctuated<T, U>(&mut self, punctuated: &Punctuated<T, U>, space: Space)
@@ -523,9 +529,12 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
         write!(self, "{}", i);
     }
 
+    /*
+     * TODO: Reorganize order?
     fn visit_impl_item(&mut self, i: &'a syn::ImplItem) {
         unimplemented!();
     }
+    */
 
     fn visit_impl_item_const(&mut self, i: &'a syn::ImplItemConst) {
         unimplemented!();
@@ -586,7 +595,29 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
     }
 
     fn visit_item_impl(&mut self, i: &'a syn::ItemImpl) {
-        unimplemented!();
+        self.visit_outer_attributes(&i.attrs);
+
+        assert!(i.defaultness.is_none()); // unimplemented
+
+        if i.unsafety.is_some() {
+            write!(self, "unsafe ");
+        }
+
+        write!(self, "impl");
+
+        assert!(i.generics.where_clause.is_none()); // unimplemented
+        self.visit_generics(&i.generics);
+
+        assert!(i.trait_.is_none()); // unimplemented
+
+        write!(self, " ");
+
+        self.visit_type(&i.self_ty);
+
+        self.block(|v| {
+            v.visit_inner_attributes(&i.attrs);
+            v.visit_impl_items(&i.items);
+        });
     }
 
     fn visit_item_macro(&mut self, i: &'a syn::ItemMacro) {
