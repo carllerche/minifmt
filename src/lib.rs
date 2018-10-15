@@ -1,3 +1,5 @@
+#![allow(unused_variables)]
+
 extern crate proc_macro2;
 extern crate syn;
 
@@ -8,7 +10,7 @@ pub use error::Error;
 use proc_macro2::TokenStream;
 use syn::visit::{Visit, visit_file};
 
-use std::fmt::Write;
+use std::fmt::{self, Write};
 
 /// Format a `TokenStream` representing a Rust file
 pub fn fmt_file(tts: TokenStream) -> Result<String, Error> {
@@ -17,16 +19,41 @@ pub fn fmt_file(tts: TokenStream) -> Result<String, Error> {
     let mut visitor = FormatFile::new();
     visit_file(&mut visitor, &file);
 
+    // Ensure there is a trailing newline character
+    if !visitor.out.is_empty() {
+        let idx = visitor.out.len() - 1;
+
+        if &visitor.out[idx..] != "\n" {
+            visitor.out.push_str("\n");
+        }
+    }
+
     Ok(visitor.out)
 }
 
 struct FormatFile {
+    /// Formatted code is appended to this buffer.
     out: String,
+
+    /// Indentation level
+    indent: usize,
 }
+
+/// Number of spaces per indentation level
+const DEFAULT_INDENT: usize = 4;
 
 impl FormatFile {
     fn new() -> FormatFile {
-        FormatFile { out: "".to_string() }
+        FormatFile {
+            out: "".to_string(),
+            indent: 0,
+        }
+    }
+
+    fn visit_attributes(&mut self, i: &[syn::Attribute]) {
+        for attr in i {
+            self.visit_attribute(attr);
+        }
     }
 
     fn visit_inner_attributes(&mut self, i: &[syn::Attribute]) {
@@ -66,18 +93,15 @@ impl FormatFile {
 
     fn visit_doc_comment(&mut self, is_inner: bool, value: &str) {
         if is_inner {
-            write!(self.out, "//!{}\n", value);
+            write!(self, "//!{}\n", value);
         } else {
-            write!(self.out, "///{}\n", value);
+            write!(self, "///{}\n", value);
         }
     }
 
     fn visit_attribute_body(&mut self, i: &syn::Attribute) {
-        unimplemented!();
-        /*
-    pub path: Path,
-    pub tts: TokenStream,
-         */
+        let meta = i.parse_meta().unwrap();
+        self.visit_meta(&meta);
     }
 
     fn visit_items(&mut self, i: &[syn::Item]) {
@@ -85,6 +109,41 @@ impl FormatFile {
             self.visit_item(item);
         }
     }
+
+    // ===== Formatting helpers =====
+
+    fn block<F, R>(&mut self, f: F) -> R
+    where F: FnOnce(&mut Self) -> R,
+    {
+        if !self.is_start_of_line() {
+            write!(self, " ");
+        }
+
+        write!(self, "{{\n");
+        let res = self.indent(f);
+        write!(self, "}}\n");
+        res
+    }
+
+    fn indent<F, R>(&mut self, f: F) -> R
+    where F: FnOnce(&mut Self) -> R
+    {
+        self.indent += 1;
+        let ret = f(self);
+        self.indent -= 1;
+        ret
+    }
+
+    fn is_start_of_line(&self) -> bool {
+        self.out.is_empty() ||
+            self.out.as_bytes().last() == Some(&b'\n')
+    }
+
+    fn push_spaces(&mut self) {
+        for _ in 0..(self.indent * DEFAULT_INDENT) {
+            self.out.push_str(" ");
+        }
+}
 }
 
 impl<'a> syn::visit::Visit<'a> for FormatFile {
@@ -121,13 +180,13 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
         if is_doc_attr(&i) {
             self.visit_doc_attribute(i);
         } else if is_inner_attr(i) {
-            write!(self.out, "#![");
+            write!(self, "#![");
             self.visit_attribute_body(i);
-            write!(self.out, "]\n");
+            write!(self, "]\n");
         } else {
-            write!(self.out, "#[");
+            write!(self, "#[");
             self.visit_attribute_body(i);
-            write!(self.out, "]\n");
+            write!(self, "]\n");
         }
     }
 
@@ -429,7 +488,7 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
         unimplemented!();
     }
     fn visit_ident(&mut self, i: &'a syn::Ident) {
-        unimplemented!();
+        write!(self, "{}", i);
     }
 
     fn visit_impl_item(&mut self, i: &'a syn::ImplItem) {
@@ -510,17 +569,17 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
         self.visit_outer_attributes(&i.attrs);
         self.visit_visibility(&i.vis);
 
-        write!(self.out, "mod {}", i.ident);
+        write!(self, "mod {}", i.ident);
 
         // TODO abstract?
         match i.content {
             Some((_, ref items)) => {
-                write!(self.out, " {{\n");
-                self.visit_items(items);
-                write!(self.out, "}}\n");
+                self.block(|me| {
+                    me.visit_items(items);
+                });
             }
             _ => {
-                write!(self.out, ";");
+                write!(self, ";");
             }
         }
     }
@@ -550,7 +609,18 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
     }
 
     fn visit_item_use(&mut self, i: &'a syn::ItemUse) {
-        unimplemented!();
+        self.visit_attributes(&i.attrs);
+        self.visit_visibility(&i.vis);
+
+        write!(self, "use ");
+
+        if i.leading_colon.is_some() {
+            write!(self, "::");
+        }
+
+        self.visit_use_tree(&i.tree);
+
+        write!(self, ";\n");
     }
 
     fn visit_item_verbatim(&mut self, i: &'a syn::ItemVerbatim) {
@@ -566,10 +636,6 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
     }
 
     fn visit_lifetime_def(&mut self, i: &'a syn::LifetimeDef) {
-        unimplemented!();
-    }
-
-    fn visit_lit(&mut self, i: &'a syn::Lit) {
         unimplemented!();
     }
 
@@ -598,7 +664,7 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
     }
 
     fn visit_lit_str(&mut self, i: &'a syn::LitStr) {
-        unimplemented!();
+        write!(self, "{:?}", i.value());
     }
 
     fn visit_lit_verbatim(&mut self, i: &'a syn::LitVerbatim) {
@@ -622,16 +688,14 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
         unimplemented!();
     }
 
-    fn visit_meta(&mut self, i: &'a syn::Meta) {
-        unimplemented!();
-    }
-
     fn visit_meta_list(&mut self, i: &'a syn::MetaList) {
         unimplemented!();
     }
 
     fn visit_meta_name_value(&mut self, i: &'a syn::MetaNameValue) {
-        unimplemented!();
+        self.visit_ident(&i.ident);
+        write!(self, " = ");
+        self.visit_lit(&i.lit);
     }
 
     fn visit_method_sig(&mut self, i: &'a syn::MethodSig) {
@@ -883,19 +947,13 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
         unimplemented!();
     }
 
-    fn visit_use_name(&mut self, i: &'a syn::UseName) {
-        unimplemented!();
-    }
-
     fn visit_use_path(&mut self, i: &'a syn::UsePath) {
-        unimplemented!();
+        self.visit_ident(&i.ident);
+        write!(self, "::");
+        self.visit_use_tree(&i.tree);
     }
 
     fn visit_use_rename(&mut self, i: &'a syn::UseRename) {
-        unimplemented!();
-    }
-
-    fn visit_use_tree(&mut self, i: &'a syn::UseTree) {
         unimplemented!();
     }
 
@@ -920,8 +978,9 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
 
         match i {
             Public(_) => {
-                write!(self.out, "pub ");
+                write!(self, "pub ");
             }
+            Inherited => {}
             actual => {
                 unimplemented!("{:?}", actual);
             }
@@ -949,4 +1008,38 @@ fn is_inner_attr(attr: &syn::Attribute) -> bool {
 fn is_doc_attr(attr: &syn::Attribute) -> bool {
     attr.path.segments.len() == 1 &&
         attr.path.segments[0].ident == "doc"
+}
+
+impl Write for FormatFile {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        let mut first = true;
+        let mut should_indent = self.is_start_of_line();
+
+        for line in s.lines() {
+            if !first {
+                self.out.push_str("\n");
+            }
+
+            first = false;
+
+            let do_indent = should_indent &&
+                !line.is_empty() &&
+                line.as_bytes()[0] != b'\n';
+
+            if do_indent {
+                self.push_spaces();
+            }
+
+            // If this loops again, then we just wrote a new line
+            should_indent = true;
+
+            self.out.push_str(line);
+        }
+
+        if s.as_bytes().last() == Some(&b'\n') {
+            self.out.push_str("\n");
+        }
+
+        Ok(())
+    }
 }
