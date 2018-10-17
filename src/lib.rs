@@ -14,7 +14,7 @@ use punct::Space::*;
 
 use proc_macro2::TokenStream;
 use syn::punctuated::Punctuated;
-use syn::visit::{Visit, visit_file};
+use syn::visit::Visit;
 
 use std::fmt::{self, Write};
 
@@ -23,7 +23,7 @@ pub fn fmt_file(tts: TokenStream) -> Result<String, Error> {
     let file: syn::File = syn::parse2(tts)?;
 
     let mut visitor = FormatFile::new();
-    visit_file(&mut visitor, &file);
+    visitor.visit_file(&file);
 
     // Ensure there is a trailing newline character
     if !visitor.out.is_empty() {
@@ -43,6 +43,9 @@ struct FormatFile {
 
     /// Indentation level
     indent: usize,
+
+    /// Set to true when visiting a statement item
+    is_stmt_item: bool,
 }
 
 /// Number of spaces per indentation level
@@ -53,6 +56,7 @@ impl FormatFile {
         FormatFile {
             out: "".to_string(),
             indent: 0,
+            is_stmt_item: false,
         }
     }
 
@@ -117,8 +121,13 @@ impl FormatFile {
     }
 
     fn visit_impl_items(&mut self, i: &[syn::ImplItem]) {
-        for item in i {
+        for (pos, item) in i.iter().enumerate() {
             self.visit_impl_item(item);
+
+            if pos + 1 < i.len() {
+                write!(self, "\n");
+            }
+            write!(self, "\n");
         }
     }
 
@@ -175,10 +184,6 @@ impl FormatFile {
     fn block_no_nl<F, R>(&mut self, f: F) -> R
     where F: FnOnce(&mut Self) -> R,
     {
-        if !self.is_start_of_line() {
-            write!(self, " ");
-        }
-
         write!(self, "{{\n");
         let res = self.indent(f);
         write!(self, "}}");
@@ -301,7 +306,38 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
     }
 
     fn visit_bin_op(&mut self, i: &'a syn::BinOp) {
-        unimplemented!();
+        use syn::BinOp::*;
+
+        write!(self, "{}", match *i {
+            Add(_) => "+",
+            Sub(_) => "-",
+            Mul(_) => "*",
+            Div(_) => "/",
+            Rem(_) => "%",
+            And(_) => "&&",
+            Or(_) => "||",
+            BitXor(_) => "^",
+            BitAnd(_) => "&",
+            BitOr(_) => "|",
+            Shl(_) => "<<",
+            Shr(_) => ">>",
+            Eq(_) => "==",
+            Lt(_) => "<",
+            Le(_) => "<=",
+            Ne(_) => "!=",
+            Ge(_) => ">=",
+            Gt(_) => ">",
+            AddEq(_) => "+=",
+            SubEq(_) => "-=",
+            MulEq(_) => "*=",
+            DivEq(_) => "/=",
+            RemEq(_) => "%=",
+            BitXorEq(_) => "^=",
+            BitAndEq(_) => "&=",
+            BitOrEq(_) => "|=",
+            ShlEq(_) => "<<=",
+            ShrEq(_) => ">>=",
+        });
     }
 
     fn visit_binding(&mut self, i: &'a syn::Binding) {
@@ -310,6 +346,8 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
 
     fn visit_block(&mut self, i: &'a syn::Block) {
         self.block_no_nl(|v| {
+            v.is_stmt_item = false;
+
             for stmt in &i.stmts {
                 v.visit_stmt(stmt);
             }
@@ -345,7 +383,12 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
     }
 
     fn visit_expr_binary(&mut self, i: &'a syn::ExprBinary) {
-        unimplemented!();
+        self.visit_attributes(&i.attrs);
+        self.visit_expr(&i.left);
+        write!(self, " ");
+        self.visit_bin_op(&i.op);
+        write!(self, " ");
+        self.visit_expr(&i.right);
     }
 
     fn visit_expr_block(&mut self, i: &'a syn::ExprBlock) {
@@ -401,8 +444,8 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
         self.visit_pat(&i.pat);
         write!(self, " in ");
         self.visit_expr(&i.expr);
-
-        self.block(|v| v.visit_block(&i.body));
+        write!(self, " ");
+        self.visit_block(&i.body);
     }
 
     fn visit_expr_group(&mut self, i: &'a syn::ExprGroup) {
@@ -413,15 +456,13 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
         self.visit_attributes(&i.attrs);
         write!(self, "if ");
         self.visit_expr(&i.cond);
-
-        self.block_no_nl(|v| v.visit_block(&i.then_branch));
+        write!(self, " ");
+        self.visit_block(&i.then_branch);
 
         if let Some((_, ref else_branch)) = i.else_branch {
             write!(self, " else ");
             self.visit_expr(else_branch);
         }
-
-        write!(self, "\n");
     }
 
     fn visit_expr_in_place(&mut self, i: &'a syn::ExprInPlace) {
@@ -449,6 +490,7 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
         self.visit_attributes(&i.attrs);
         write!(self, "match ");
         self.visit_expr(&i.expr);
+        write!(self, " ");
         self.block_no_nl(|v| {
             for arm in &i.arms {
                 v.visit_arm(arm);
@@ -503,8 +545,16 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
     fn visit_expr_struct(&mut self, i: &'a syn::ExprStruct) {
         self.visit_attributes(&i.attrs);
         self.visit_path(&i.path);
-        write!(self, "{{");
-        write!(self, "}}");
+        write!(self, " ");
+        self.block_no_nl(|v| {
+            v.visit_punctuated(&i.fields, NewLine);
+
+            if let Some(_) = i.dot2_token {
+                write!(v, ".. ");
+                let rest = i.rest.as_ref().unwrap();
+                v.visit_expr(&rest);
+            }
+        })
     }
 
     fn visit_expr_try(&mut self, i: &'a syn::ExprTry) {
@@ -568,7 +618,21 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
 
 
     fn visit_field_value(&mut self, i: &'a syn::FieldValue) {
-        unimplemented!();
+        use syn::Member::*;
+
+        self.visit_attributes(&i.attrs);
+
+        match i.member {
+            Named(ref ident) => {
+                self.visit_ident(ident);
+                write!(self, ": ");
+                self.visit_expr(&i.expr);
+
+            }
+            Unnamed(_) => {
+                unimplemented!();
+            }
+        }
     }
 
     fn visit_fields_named(&mut self, i: &'a syn::FieldsNamed) {
@@ -582,7 +646,9 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
     }
 
     fn visit_file(&mut self, i: &'a syn::File) {
-        unimplemented!();
+        assert!(i.shebang.is_none()); // unimplemented
+        self.visit_attributes(&i.attrs);
+        self.visit_items(&i.items);
     }
 
     fn visit_fn_decl(&mut self, i: &'a syn::FnDecl) {
@@ -597,8 +663,6 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
         write!(self, ")");
 
         // TODO: If there are where clauses, they come here.
-        write!(self, " ");
-
         self.visit_return_type(&i.output);
     }
 
@@ -673,6 +737,7 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
         self.visit_attributes(&i.attrs);
         self.visit_visibility(&i.vis);
         self.visit_method_sig(&i.sig);
+        write!(self, " ");
         self.visit_block(&i.block);
     }
 
@@ -899,8 +964,6 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
             write!(self, " = ");
             self.visit_expr(init);
         }
-
-        write!(self, ";\n");
     }
 
     fn visit_macro(&mut self, i: &'a syn::Macro) {
@@ -1071,7 +1134,7 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
 
         match *i {
             Type(_, ref ty) => {
-                write!(self, "-> ");
+                write!(self, " -> ");
                 self.visit_type(ty);
             }
             _ => {}
@@ -1085,22 +1148,37 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
     fn visit_stmt(&mut self, i: &'a syn::Stmt) {
         use syn::Stmt::*;
 
+        // Some custom spacing
+        match *i {
+            Item(_) => {
+                self.is_stmt_item = true;
+            }
+            _ => {
+                if self.is_stmt_item {
+                    write!(self, "\n");
+                }
+
+                self.is_stmt_item = false;
+            }
+        }
+
         match *i {
             Local(ref v) => {
                 self.visit_local(v);
-                write!(self, ";");
+                write!(self, ";\n");
             }
             Item(ref v) => {
                 self.visit_item(v);
             }
-            Expr(ref v) => self.visit_expr(v),
+            Expr(ref v) => {
+                self.visit_expr(v);
+                write!(self, "\n");
+            }
             Semi(ref v, _) => {
                 self.visit_expr(v);
-                write!(self, ";");
+                write!(self, ";\n");
             }
         }
-
-        write!(self, "\n");
     }
 
     fn visit_trait_bound(&mut self, i: &'a syn::TraitBound) {

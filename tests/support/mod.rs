@@ -9,7 +9,7 @@ macro_rules! check {
         let expect = $expect;
 
         if actual != &expect[1..] {
-            panic!("assertion failed. \n\n=== Expected: ===\n\n{}\n\n=== Actual: ===\n\n{}\n",
+            panic!("assertion failed. \n\n=== Expected: ===\n\n---\n{}---\n\n=== Actual: ===\n\n---\n{}---\n\n",
                    &expect[1..], actual);
         }
     }}

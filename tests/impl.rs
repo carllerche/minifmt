@@ -36,6 +36,24 @@ impl MyStruct {
 }
 
 #[test]
+fn init_tuple_struct() {
+    check! {
+        r#"
+impl Foo {
+    fn new() -> Self {
+        Foo(1, "two", foo(), 2 + 3)
+    }
+}
+"#,
+        impl Foo {
+            fn new() -> Self {
+                Foo(1, "two", foo(), 2 + 3)
+            }
+        }
+    }
+}
+
+#[test]
 fn basic_functions() {
     check! {
         r#"
@@ -74,7 +92,6 @@ impl MyStruct {
         use syn::Lit::*;
 
         let meta = i.parse_meta().unwrap();
-
         match meta {
             NameValue(name_value) => {
                 match name_value.lit {

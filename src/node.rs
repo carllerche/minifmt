@@ -17,6 +17,7 @@ macro_rules! impl_node {
 
 impl_node!(Expr, visit_expr);
 impl_node!(Field, visit_field);
+impl_node!(FieldValue, visit_field_value);
 impl_node!(FnArg, visit_fn_arg);
 impl_node!(GenericArgument, visit_generic_argument);
 impl_node!(GenericParam, visit_generic_param);
