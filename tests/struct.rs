@@ -77,3 +77,25 @@ struct MyStruct {
         }
     }
 }
+
+#[test]
+fn where_clause() {
+    check! {
+        r#"
+struct MyStruct<S, Request>
+where
+    S: Service<Request>,
+    Request: fmt::Debug,
+{
+    service: S,
+}
+"#,
+        struct MyStruct<S, Request>
+        where
+            S: Service<Request>,
+            Request: fmt::Debug,
+        {
+            service: S,
+        }
+    }
+}

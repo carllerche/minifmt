@@ -54,6 +54,50 @@ impl Foo {
 }
 
 #[test]
+fn fn_with_where_clause() {
+    check! {
+        r#"
+impl Foo {
+    fn bar<S, Request>(&self, s: S) -> Foo
+    where
+        S: Service<Request>,
+        S::Future: Send + 'static,
+    {
+    }
+}
+"#,
+        impl Foo {
+            fn bar<S, Request>(&self, s: S) -> Foo
+            where
+                S: Service<Request>,
+                S::Future: Send + 'static,
+            {
+            }
+        }
+    }
+}
+
+#[test]
+fn impl_with_where_clause() {
+    check! {
+        r#"
+impl<S, Request> Foo
+where
+    S: Service<Request>,
+    S::Future: Send + 'static,
+{
+}
+"#,
+        impl<S, Request> Foo
+        where
+            S: Service<Request>,
+            S::Future: Send + 'static,
+        {
+        }
+    }
+}
+
+#[test]
 fn basic_functions() {
     check! {
         r#"

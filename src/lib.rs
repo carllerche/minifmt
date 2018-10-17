@@ -137,6 +137,17 @@ impl FormatFile {
         write!(self, "{}", tts.to_string());
     }
 
+    /// Returns `true` if where clause was present
+    fn visit_where_clause_if_present(&mut self, generics: &syn::Generics) -> bool {
+        if let Some(ref where_clause) = generics.where_clause {
+            write!(self, "\n");
+            self.visit_where_clause(where_clause);
+            true
+        } else {
+            false
+        }
+    }
+
     // ===== Formatting helpers =====
 
     fn visit_punctuated<T, U>(&mut self, punctuated: &Punctuated<T, U>, space: Space)
@@ -171,10 +182,6 @@ impl FormatFile {
     fn block<F, R>(&mut self, f: F) -> R
     where F: FnOnce(&mut Self) -> R,
     {
-        if !self.is_start_of_line() {
-            write!(self, " ");
-        }
-
         write!(self, "{{\n");
         let res = self.indent(f);
         write!(self, "}}\n");
@@ -652,7 +659,6 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
     }
 
     fn visit_fn_decl(&mut self, i: &'a syn::FnDecl) {
-        assert!(i.generics.where_clause.is_none()); // unimplemented
         self.visit_generics(&i.generics);
 
         write!(self, "(");
@@ -662,8 +668,8 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
 
         write!(self, ")");
 
-        // TODO: If there are where clauses, they come here.
         self.visit_return_type(&i.output);
+        self.visit_where_clause_if_present(&i.generics);
     }
 
     fn visit_foreign_item(&mut self, i: &'a syn::ForeignItem) {
@@ -703,9 +709,7 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
         self.visit_punctuated(&i.params, SpaceRight);
         write!(self, ">");
 
-        if let Some(ref where_clause) = i.where_clause {
-            self.visit_where_clause(where_clause);
-        }
+        // Where clauses are not visited here
     }
 
     fn visit_ident(&mut self, i: &'a syn::Ident) {
@@ -737,7 +741,12 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
         self.visit_attributes(&i.attrs);
         self.visit_visibility(&i.vis);
         self.visit_method_sig(&i.sig);
-        write!(self, " ");
+
+        if i.sig.decl.generics.where_clause.is_some() {
+        } else {
+            write!(self, " ");
+        }
+
         self.visit_block(&i.block);
     }
 
@@ -794,7 +803,6 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
 
         write!(self, "impl");
 
-        assert!(i.generics.where_clause.is_none()); // unimplemented
         self.visit_generics(&i.generics);
 
         assert!(i.trait_.is_none()); // unimplemented
@@ -802,6 +810,10 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
         write!(self, " ");
 
         self.visit_type(&i.self_ty);
+
+        if !self.visit_where_clause_if_present(&i.generics) {
+            write!(self, " ");
+        }
 
         self.block(|v| {
             v.visit_inner_attributes(&i.attrs);
@@ -826,6 +838,7 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
         // TODO abstract?
         match i.content {
             Some((_, ref items)) => {
+                write!(self, " ");
                 self.block(|me| {
                     me.visit_items(items);
                 });
@@ -841,13 +854,29 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
     }
 
     fn visit_item_struct(&mut self, i: &'a syn::ItemStruct) {
+        use syn::Fields::*;
+
         self.visit_attributes(&i.attrs);
         self.visit_visibility(&i.vis);
 
         write!(self, "struct {}", i.ident);
 
         self.visit_generics(&i.generics);
-        self.visit_fields(&i.fields);
+
+        match i.fields {
+            Named(ref fields_named) => {
+                if !self.visit_where_clause_if_present(&i.generics) {
+                    write!(self, " ");
+                }
+
+                self.visit_fields_named(fields_named);
+            }
+            Unnamed(ref fields_unnaamed) => {
+                self.visit_fields_unnamed(fields_unnaamed);
+                self.visit_where_clause_if_present(&i.generics);
+            }
+            Unit => {}
+        }
 
         if i.semi_token.is_some() {
             write!(self, ";");
@@ -894,7 +923,8 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
     }
 
     fn visit_lifetime(&mut self, i: &'a syn::Lifetime) {
-        unimplemented!();
+        write!(self, "'");
+        self.visit_ident(&i.ident);
     }
 
     fn visit_lifetime_def(&mut self, i: &'a syn::LifetimeDef) {
@@ -1118,7 +1148,10 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
     }
 
     fn visit_predicate_type(&mut self, i: &'a syn::PredicateType) {
-        unimplemented!();
+        assert!(i.lifetimes.is_none(), "{:?}", i.lifetimes); // unimplemented!();
+        self.visit_type(&i.bounded_ty);
+        write!(self, ": ");
+        self.visit_punctuated(&i.bounds, SpaceBoth);
     }
 
     fn visit_qself(&mut self, i: &'a syn::QSelf) {
@@ -1386,10 +1419,6 @@ impl<'a> syn::visit::Visit<'a> for FormatFile {
         self.indent(|v| {
             v.visit_punctuated(&i.predicates, NewLine);
         });
-    }
-
-    fn visit_where_predicate(&mut self, i: &'a syn::WherePredicate) {
-        unimplemented!();
     }
 }
 
