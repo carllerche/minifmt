@@ -30,6 +30,7 @@ fn main() {
 
     println!("{}", minifmt::fmt(token_stream));
 }
+```
 
 ## License
 
