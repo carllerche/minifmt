@@ -18,8 +18,8 @@ use syn::visit::Visit;
 
 use std::fmt::{self, Write};
 
-/// Format a `TokenStream` representing a Rust file
-pub fn fmt_file(tts: TokenStream) -> Result<String, Error> {
+/// Format a `TokenStream`
+pub fn fmt(tts: TokenStream) -> Result<String, Error> {
     let file: syn::File = syn::parse2(tts)?;
 
     let mut visitor = FormatFile::new();
