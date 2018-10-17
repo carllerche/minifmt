@@ -3,7 +3,7 @@
 Rust library for performing minimal formatting. Takes [`TokenStream`] arguments
 and outputs a formatted string.
 
-** This is not a replacement for rustfmt **
+**This is not a replacement for rustfmt**
 
 In fact, this crate will most likely be deprecated once rustfmt works on stable.
 You also probably shouldn't use this to format handwritten code.
